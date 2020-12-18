@@ -46,11 +46,19 @@
                   <span class="edit-file"><span class="fa fa-pencil cms-icon cms-icon-settings"></span></span>
             </a>
 
+            {% if object %}
+            <a href="{{ object.get_admin_change_url }}" class="js-related-lookup related-lookup {% if object %}related-lookup-change{% endif %} lookup" id="{{ id }}_lookup"
+               title="{% trans 'Lookup' %}">
+                <span class="choose-file"><span class="fa fa-picture-o"></span>{% trans 'Choose File' %}</span>
+                <span class="edit-file"><span class="fa fa-pencil"></span></span>
+            </a>
+            {% else %}
             <a href="{{ lookup_url }}" class="js-related-lookup related-lookup {% if object %}related-lookup-change{% endif %} lookup" id="{{ id }}_lookup"
                title="{% translate 'Lookup' %}">
                 <span class="choose-file"><span class="fa fa-search cms-icon cms-icon-search"></span>{% translate 'Choose File' %}</span>
                 <span class="replace-file"><span class="fa fa-search cms-icon cms-icon-search"></span></span>
             </a>
+            {% endif %}
 
             <br>
 
