@@ -7,7 +7,8 @@ from .. import settings
 class PermissionAdmin(admin.ModelAdmin):
     fieldsets = [
         (None, {'fields': ['type', 'folder']}),
-        (_("Who"), {'fields': ['user', 'group', 'everybody']}),
+        # (_("Who"), {'fields': ['user', 'group', 'everybody']}),
+        (_("Who"), {'fields': ['everybody']}),
         (_("What"), {'fields': ['can_edit', 'can_read', 'can_add_children']}),
     ]
     list_filter = ['group']
