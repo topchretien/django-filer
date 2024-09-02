@@ -61,7 +61,7 @@ class FolderAdmin(PrimitivePermissionAwareModelAdmin):
     list_per_page = 100
     list_filter = ('owner',)
     search_fields = ['name']
-    autocomplete_fields = ['owner']
+    #autocomplete_fields = ['owner']
     save_as = True  # see ImageAdmin
     actions = ['delete_files_or_folders', 'move_files_and_folders',
                'copy_files_and_folders', 'resize_images', 'rename_files']
