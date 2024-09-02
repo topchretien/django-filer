@@ -55,6 +55,7 @@ class FileAdmin(PrimitivePermissionAwareModelAdmin):
     list_per_page = 10
     search_fields = ['name', 'original_filename', 'sha1', 'description']
     #autocomplete_fields = ('owner',)
+    raw_id_fields = ['owner']
     readonly_fields = ('sha1', 'display_canonical')
 
     form = FileAdminChangeFrom

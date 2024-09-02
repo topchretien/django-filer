@@ -15,6 +15,7 @@ class PermissionAdmin(admin.ModelAdmin):
     list_display = ['pretty_logical_path', 'who', 'what']
     search_fields = ['user__username', 'group__name', 'folder__name']
     autocomplete_fields = ['folder']
+    raw_id_fields = ['user', 'group']
 
     class Media:
         css = {'all': ['filer/css/admin_folderpermissions.css']}
