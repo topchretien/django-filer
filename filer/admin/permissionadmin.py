@@ -11,12 +11,14 @@ class PermissionAdmin(admin.ModelAdmin):
     fieldsets = [
         (None, {'fields': ['type', 'folder']}),
         (_("Who"), {'fields': ['user', 'group', 'everybody']}),
+        #(_("Who"), {'fields': ['everybody']}),
         (_("What"), {'fields': ['can_edit', 'can_read', 'can_add_children']}),
     ]
     list_filter = ['group']
     list_display = ['pretty_logical_path', 'who', 'what']
     search_fields = ['user__username', 'group__name', 'folder__name']
-    autocomplete_fields = ['user', 'group', 'folder']
+    autocomplete_fields = ['folder']
+    raw_id_fields = ['user', 'group']
 
     class Media:
         css = {'all': ['filer/css/admin_folderpermissions.css']}
