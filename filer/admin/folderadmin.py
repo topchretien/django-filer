@@ -5,6 +5,7 @@ from collections import OrderedDict
 from urllib.parse import quote as urlquote
 from urllib.parse import unquote as urlunquote
 
+from django import VERSION as DJANGO_VERSION
 from django import forms
 from django.conf import settings as django_settings
 from django.contrib import messages
@@ -16,7 +17,8 @@ from django.db import models, router
 from django.db.models import Case, F, OuterRef, Subquery, When
 from django.db.models.functions import Coalesce, Lower
 from django.http import HttpResponse, HttpResponseRedirect
-from django.shortcuts import get_object_or_404, render
+from django.shortcuts import get_object_or_404
+from django.template.response import TemplateResponse
 from django.urls import path, reverse
 from django.utils.encoding import force_str
 from django.utils.html import escape, format_html
@@ -27,8 +29,11 @@ from django.utils.translation import ngettext_lazy
 from easy_thumbnails.models import Thumbnail
 
 from .. import settings
+from ..cache import clear_folder_permission_cache
 from ..models import File, Folder, FolderPermission, FolderRoot, ImagesWithMissingData, UnsortedImages, tools
-from ..settings import FILER_IMAGE_MODEL, FILER_PAGINATE_BY, TABLE_LIST_TYPE
+from ..settings import (
+    FILER_IMAGE_MODEL, FILER_PAGINATE_BY, FILER_TABLE_ICON_SIZE, FILER_THUMBNAIL_ICON_SIZE, TABLE_LIST_TYPE,
+)
 from ..thumbnail_processors import normalize_subject_location
 from ..utils.compatibility import get_delete_permission
 from ..utils.filer_easy_thumbnails import FilerActionThumbnailer
@@ -66,7 +71,11 @@ class FolderAdmin(PrimitivePermissionAwareModelAdmin):
     actions = ['delete_files_or_folders', 'move_files_and_folders',
                'copy_files_and_folders', 'resize_images', 'rename_files']
 
-    directory_listing_template = 'admin/filer/folder/directory_listing.html'
+    if DJANGO_VERSION >= (5, 2):
+        directory_listing_template = 'admin/filer/folder/directory_listing.html'
+    else:  # Remove this when Django 5.2 is the minimum version
+        directory_listing_template = 'admin/filer/folder/legacy_listing.html'
+
     order_by_file_fields = ['_file_size', 'original_filename', 'name', 'owner',
                             'uploaded_at', 'modified_at']
 
@@ -106,6 +115,9 @@ class FolderAdmin(PrimitivePermissionAwareModelAdmin):
         Given a ModelForm return an unsaved instance. ``change`` is True if
         the object is being changed, and False if it's being added.
         """
+        if not change:
+            # New folder invalidates the folder permission cache (or it will not be visible)
+            clear_folder_permission_cache(request.user)
         r = form.save(commit=False)
         parent_id = request.GET.get('parent_id', None)
         if not parent_id:
@@ -253,10 +265,10 @@ class FolderAdmin(PrimitivePermissionAwareModelAdmin):
                 self.get_queryset(request).get(id=last_folder_id)
             except self.model.DoesNotExist:
                 url = reverse('admin:filer-directory_listing-root')
-                url = "{}{}".format(url, admin_url_params_encoded(request))
+                url = f"{url}{admin_url_params_encoded(request)}"
             else:
                 url = reverse('admin:filer-directory_listing', kwargs={'folder_id': last_folder_id})
-                url = "{}{}".format(url, admin_url_params_encoded(request))
+                url = f"{url}{admin_url_params_encoded(request)}"
             return HttpResponseRedirect(url)
         elif folder_id is None:
             folder = FolderRoot()
@@ -266,11 +278,13 @@ class FolderAdmin(PrimitivePermissionAwareModelAdmin):
 
         list_type = get_directory_listing_type(request) or settings.FILER_FOLDER_ADMIN_DEFAULT_LIST_TYPE
         if list_type == TABLE_LIST_TYPE:
-            size = "40x40"  # Prefetch thumbnails for listing
-            size_x2 = "80x80"
+            # Prefetch thumbnails for table view
+            size = f"{FILER_TABLE_ICON_SIZE}x{FILER_TABLE_ICON_SIZE}"
+            size_x2 = f"{2 * FILER_TABLE_ICON_SIZE}x{2 * FILER_TABLE_ICON_SIZE}"
         else:
-            size = "160x160"  # Prefetch thumbnails for thumbnail view
-            size_x2 = "320x320"
+            # Prefetch thumbnails for thumbnail view
+            size = f"{FILER_THUMBNAIL_ICON_SIZE}x{FILER_THUMBNAIL_ICON_SIZE}"
+            size_x2 = f"{2 * FILER_THUMBNAIL_ICON_SIZE}x{2 * FILER_THUMBNAIL_ICON_SIZE}"
 
         # Check actions to see if any are available on this changelist
         actions = self.get_actions(request)
@@ -320,14 +334,13 @@ class FolderAdmin(PrimitivePermissionAwareModelAdmin):
         order_by = request.GET.get('order_by', None)
         order_by_annotation = None
         if order_by is None:
-            file_qs = file_qs.annotate(coalesce_sort_field=Coalesce(
+            order_by_annotation = Lower(Coalesce(
                 Case(
                     When(name__exact='', then=None),
                     When(name__isnull=False, then='name')
                 ),
                 'original_filename'
             ))
-            order_by_annotation = Lower('coalesce_sort_field')
 
         order_by = order_by.split(',') if order_by else []
         order_by = [field for field in order_by
@@ -463,6 +476,7 @@ class FolderAdmin(PrimitivePermissionAwareModelAdmin):
             'show_result_count': show_result_count,
             'folder_children': folder_qs,
             'folder_files': file_qs,
+            'thumbnail_size': FILER_TABLE_ICON_SIZE if list_type == TABLE_LIST_TYPE else FILER_THUMBNAIL_ICON_SIZE,
             'limit_search_to_folder': limit_search_to_folder,
             'is_popup': popup_status(request),
             'filer_admin_context': AdminContext(request),
@@ -480,7 +494,7 @@ class FolderAdmin(PrimitivePermissionAwareModelAdmin):
             'enable_permissions': settings.FILER_ENABLE_PERMISSIONS,
             'can_make_folder': request.user.is_superuser or (folder.is_root and settings.FILER_ALLOW_REGULAR_USERS_TO_ADD_ROOT_FOLDERS) or permissions.get("has_add_children_permission"),
         })
-        return render(request, self.directory_listing_template, context)
+        return TemplateResponse(request, self.directory_listing_template, context)
 
     def filter_folder(self, qs, terms=()):
         # Source: https://github.com/django/django/blob/1.7.1/django/contrib/admin/options.py#L939-L947  flake8: noqa
@@ -768,9 +782,15 @@ class FolderAdmin(PrimitivePermissionAwareModelAdmin):
             n = files_queryset.count() + folders_queryset.count()
             if n:
                 # delete all explicitly selected files
-                for f in files_queryset:
-                    self.log_deletion(request, f, force_str(f))
-                    f.delete()
+                if DJANGO_VERSION >= (5, 1):
+                    self.log_deletions(request, files_queryset)
+                    # Still need to delete files individually (not only the database entries)
+                    for f in files_queryset:
+                        f.delete()
+                else:
+                    for f in files_queryset:
+                        self.log_deletion(request, f, force_str(f))
+                        f.delete()
                 # delete all files in all selected folders and their children
                 # This would happen automatically by ways of the delete
                 # cascade, but then the individual .delete() methods won't be
@@ -779,13 +799,24 @@ class FolderAdmin(PrimitivePermissionAwareModelAdmin):
                 for folder in folders_queryset:
                     folder_ids.add(folder.id)
                     folder_ids.update(folder.get_descendants_ids())
-                for f in File.objects.filter(folder__in=folder_ids):
-                    self.log_deletion(request, f, force_str(f))
-                    f.delete()
+                if DJANGO_VERSION >= (5, 1):
+                    qs = File.objects.filter(folder__in=folder_ids)
+                    self.log_deletions(request, qs)
+                    # Still need to delete files individually (not only the database entries)
+                    for f in qs:
+                        f.delete()
+                else:
+                    for f in File.objects.filter(folder__in=folder_ids):
+                        self.log_deletion(request, f, force_str(f))
+                        f.delete()
                 # delete all folders
-                for f in folders_queryset:
-                    self.log_deletion(request, f, force_str(f))
-                    f.delete()
+                if DJANGO_VERSION >= (5, 1):
+                    self.log_deletions(request, files_queryset)
+                    folders_queryset.delete()
+                else:
+                    for f in folders_queryset:
+                        self.log_deletion(request, f, force_str(f))
+                        f.delete()
                 self.message_user(request, _("Successfully deleted %(count)d files and/or folders.") % {"count": n, })
             # Return None to display the change list page again.
             return None
@@ -814,7 +845,7 @@ class FolderAdmin(PrimitivePermissionAwareModelAdmin):
         })
 
         # Display the destination folder selection page
-        return render(
+        return TemplateResponse(
             request,
             "admin/filer/delete_selected_files_confirmation.html",
             context
@@ -840,7 +871,7 @@ class FolderAdmin(PrimitivePermissionAwareModelAdmin):
         else:
             # Don't display link to edit, because it either has no
             # admin or is edited inline.
-            return '{}: {}'.format(capfirst(opts.verbose_name), force_str(obj))
+            return f'{capfirst(opts.verbose_name)}: {force_str(obj)}'
 
     def _check_copy_perms(self, request, files_queryset, folders_queryset):
         try:
@@ -954,7 +985,7 @@ class FolderAdmin(PrimitivePermissionAwareModelAdmin):
         })
 
         # Display the destination folder selection page
-        return render(request, "admin/filer/folder/choose_move_destination.html", context)
+        return TemplateResponse(request, "admin/filer/folder/choose_move_destination.html", context)
 
     move_files_and_folders.short_description = _("Move selected files and/or folders")
 
@@ -1037,7 +1068,7 @@ class FolderAdmin(PrimitivePermissionAwareModelAdmin):
         })
 
         # Display the rename format selection page
-        return render(request, "admin/filer/folder/choose_rename_format.html", context)
+        return TemplateResponse(request, "admin/filer/folder/choose_rename_format.html", context)
 
     rename_files.short_description = _("Rename files")
 
@@ -1073,7 +1104,7 @@ class FolderAdmin(PrimitivePermissionAwareModelAdmin):
         count = itertools.count(1)
         original = name
         while destination.contains_folder(name):
-            name = "{}_{}".format(original, next(count))
+            name = f"{original}_{next(count)}"
         return name
 
     def _copy_folder(self, folder, destination, suffix, overwrite):
@@ -1169,7 +1200,7 @@ class FolderAdmin(PrimitivePermissionAwareModelAdmin):
         })
 
         # Display the destination folder selection page
-        return render(request, "admin/filer/folder/choose_copy_destination.html", context)
+        return TemplateResponse(request, "admin/filer/folder/choose_copy_destination.html", context)
 
     copy_files_and_folders.short_description = _("Copy selected files and/or folders")
 
@@ -1298,6 +1329,6 @@ class FolderAdmin(PrimitivePermissionAwareModelAdmin):
         })
 
         # Display the resize options page
-        return render(request, "admin/filer/folder/choose_images_resize_options.html", context)
+        return TemplateResponse(request, "admin/filer/folder/choose_images_resize_options.html", context)
 
     resize_images.short_description = _("Resize selected images")
